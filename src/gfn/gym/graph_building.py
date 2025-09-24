@@ -314,7 +314,9 @@ class GraphBuilding(GraphEnv):
             max_nodes = self.max_nodes or 10
             n_nodes = np.random.randint(1, max_nodes + 1)
             n_possible_edges = (
-                n_nodes**2 - n_nodes if self.is_directed else (n_nodes**2 - n_nodes) // 2
+                n_nodes**2 - n_nodes
+                if self.is_directed
+                else (n_nodes**2 - n_nodes) // 2
             )
 
             # Create random node features
@@ -375,6 +377,13 @@ class GraphBuilding(GraphEnv):
         env = self
 
         class GraphBuildingActions(GraphActions):
+            dummy_action = GraphActions.make_dummy_actions(
+                (1,), device=self.device
+            ).tensor
+            exit_action = GraphActions.make_exit_actions(
+                (1,), device=self.device
+            ).tensor
+
             @classmethod
             def edge_index_action_to_src_dst(
                 cls, edge_index_action: torch.Tensor, n_nodes: int

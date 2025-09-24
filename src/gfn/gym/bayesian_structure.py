@@ -195,7 +195,9 @@ class BayesianStructure(GraphBuilding):
                     src, dst = graph.edge_index
                     batch_adjacency[i, src, dst] = True
 
-                edge_masks = batch_adjacency.flatten(1, 2).reshape(*self.batch_shape, -1)
+                edge_masks = batch_adjacency.flatten(1, 2).reshape(
+                    *self.batch_shape, -1
+                )
 
                 # There are 3 action types: ADD_NODE, ADD_EDGE, EXIT
                 action_type = torch.zeros(
@@ -251,6 +253,13 @@ class BayesianStructure(GraphBuilding):
 
     def make_actions_class(self) -> type[GraphActions]:
         class GraphBuildingActions(GraphActions):
+            dummy_action = GraphActions.make_dummy_actions(
+                (1,), device=self.device
+            ).tensor
+            exit_action = GraphActions.make_exit_actions(
+                (1,), device=self.device
+            ).tensor
+
             @classmethod
             def edge_index_action_to_src_dst(
                 cls, edge_index_action: torch.Tensor, n_nodes: int

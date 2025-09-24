@@ -35,17 +35,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from tensordict import TensorDict
-from torch_geometric.data import Batch as GeometricBatch
-from torch_geometric.nn import global_add_pool
-from tqdm import trange
-
 from gfn.actions import GraphActions, GraphActionType
 from gfn.containers.replay_buffer import ReplayBuffer
 from gfn.containers.trajectories import Trajectories
 from gfn.estimators import DiscreteGraphPolicyEstimator
+from gfn.gflownet import ModifiedDBGFlowNet
 from gfn.gflownet.trajectory_balance import TBGFlowNet
-from gfn.gym.bayesian_structure import BayesianStructure
 from gfn.gym.helpers.bayesian_structure.evaluation import (
     expected_edges,
     expected_shd,
@@ -61,6 +56,12 @@ from gfn.gym.helpers.bayesian_structure.jsd import (
 )
 from gfn.utils.common import set_seed
 from gfn.utils.modules import GraphActionGNN, GraphActionUniform, GraphEdgeActionMLP
+from tensordict import TensorDict
+from torch_geometric.data import Batch as GeometricBatch
+from torch_geometric.nn import global_add_pool
+from tqdm import trange
+
+from gfn.gym.bayesian_structure import BayesianStructure
 
 
 class DAGEdgeActionMLP(GraphEdgeActionMLP):
@@ -380,9 +381,9 @@ class DAGEdgeActionGNNv2(nn.Module):
         edge_actions = edge_actions / temperature
 
         # Make TensorDict output
-        action_type = torch.ones(len(states_tensor), 3, device=node_embs.device) * float(
-            "-inf"
-        )
+        action_type = torch.ones(
+            len(states_tensor), 3, device=node_embs.device
+        ) * float("-inf")
         if self.is_backward:
             action_type[..., GraphActionType.ADD_EDGE] = 0.0  # log(1.0)
         else:
@@ -410,31 +411,8 @@ class DAGEdgeActionGNNv2(nn.Module):
         )
 
 
-def main(args: Namespace):
-    set_seed(args.seed)
-    device = "cuda" if torch.cuda.is_available() and args.use_cuda else "cpu"
-
-    torch.manual_seed(args.seed)
-    rng = np.random.default_rng(args.seed)
-
-    # Create the scorer
-    scorer, data, gt_graph = get_scorer(
-        args.graph_name,
-        args.prior_name,
-        args.num_nodes,
-        args.num_edges,
-        args.num_samples,
-        args.node_names,
-        rng=rng,
-    )
-
-    # Create the environment
-    env = BayesianStructure(
-        n_nodes=args.num_nodes,
-        state_evaluator=scorer.state_evaluator,
-        device=device,
-    )
-
+def set_up_pb_pf_estimators(args, env):
+    """Returns a pair of estimators for the forward and backward policies."""
     if args.module == "mlp":
         pf_module = DAGEdgeActionMLP(
             n_nodes=env.n_nodes,
@@ -478,17 +456,65 @@ def main(args: Namespace):
         is_backward=True,
     )
 
-    gflownet = TBGFlowNet(pf, pb)
+    return (pf, pb)
+
+
+def set_up_gflownet(args, env):
+    """Returns a GFlowNet complete with the required estimators."""
+    pf_estimator, pb_estimator = set_up_pb_pf_estimators(
+        args,
+        env,
+    )
+    assert pf_estimator is not None
+    assert pb_estimator is not None
+    if args.loss == "ModifiedDB":
+        return ModifiedDBGFlowNet(pf=pf_estimator, pb=pb_estimator)
+    elif args.loss == "TB":
+        return TBGFlowNet(pf=pf_estimator, pb=pb_estimator, init_logZ=0.0)
+    else:
+        raise ValueError(f"Invalid loss: {args.loss}")
+
+
+def main(args: Namespace):
+    set_seed(args.seed)
+    device = "cuda" if torch.cuda.is_available() and args.use_cuda else "cpu"
+
+    torch.manual_seed(args.seed)
+    rng = np.random.default_rng(args.seed)
+
+    # Create the scorer
+    scorer, data, gt_graph = get_scorer(
+        args.graph_name,
+        args.prior_name,
+        args.num_nodes,
+        args.num_edges,
+        args.num_samples,
+        args.node_names,
+        rng=rng,
+    )
+
+    # Create the environment
+    env = BayesianStructure(
+        n_nodes=args.num_nodes,
+        state_evaluator=scorer.state_evaluator,
+        device=device,
+    )
+
+    gflownet = set_up_gflownet(args, env)
+    assert gflownet is not None, f"gflownet is None, Args: {args}"
     gflownet = gflownet.to(device)
 
-    # Log Z gets dedicated learning rate (typically higher).
+    non_logz_params = [
+        v for k, v in dict(gflownet.named_parameters()).items() if k != "logZ"
+    ]
+    if "logZ" in dict(gflownet.named_parameters()):
+        logz_params = [dict(gflownet.named_parameters())["logZ"]]
+    else:
+        logz_params = []
     params = [
-        {
-            "params": [
-                v for k, v in dict(gflownet.named_parameters()).items() if k != "logZ"
-            ],
-            "lr": args.lr,
-        }
+        {"params": non_logz_params, "lr": args.lr},
+        # Log Z gets dedicated learning rate (typically higher).
+        {"params": logz_params, "lr": args.lr_Z},
     ]
     optimizer = torch.optim.Adam(params)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
@@ -530,40 +556,37 @@ def main(args: Namespace):
             save_logprobs=True if not args.use_buffer else False,
             epsilon=epsilon_dict,
         )
-        _training_samples = gflownet.to_training_samples(trajectories)
+        training_objects = gflownet.to_training_samples(trajectories)
 
         if args.use_buffer:
             assert replay_buffer is not None
             with torch.no_grad():
-                replay_buffer.add(_training_samples)
+                replay_buffer.add(training_objects)
             if it < args.prefill or len(replay_buffer) < args.batch_size:
                 continue
 
         for _ in range(args.n_steps_per_iteration):
             if args.use_buffer:
                 assert replay_buffer is not None
-                training_samples = replay_buffer.sample(n_samples=args.batch_size)
+                training_objects = replay_buffer.sample(n_samples=args.batch_size)
             else:
-                training_samples = _training_samples
-            assert isinstance(training_samples, Trajectories)
+                training_objects = training_objects
 
             optimizer.zero_grad()
             if optimizer_logZ is not None:
                 optimizer_logZ.zero_grad()
-            loss = gflownet.loss(env, training_samples, recalculate_all_logprobs=True)
+            loss = gflownet.loss(env, training_objects, recalculate_all_logprobs=True)
             loss.backward()
             optimizer.step()
             scheduler.step()
             if optimizer_logZ is not None:
                 optimizer_logZ.step()
 
-        assert training_samples.log_rewards is not None
+        assert training_objects.log_rewards is not None
         postfix = {
             "Loss": loss.item(),
-            "log_r_mean": training_samples.log_rewards.mean().item(),
+            "log_r_mean": training_objects.log_rewards.mean().item(),
         }
-        if isinstance(gflownet.logZ, nn.Parameter):
-            postfix["logZ"] = gflownet.logZ.item()
         pbar.set_postfix(postfix)
 
     # Compute the metrics
@@ -643,6 +666,15 @@ if __name__ == "__main__":
     parser.add_argument("--buffer_capacity", type=int, default=100000)
     parser.add_argument("--prefill", type=int, default=100)
     parser.add_argument("--sampling_batch_size", type=int, default=32)
+
+    # Loss
+    parser.add_argument(
+        "--loss",
+        type=str,
+        choices=["TB", "ModifiedDB"],
+        default="ModifiedDB",
+        help="Loss function to use",
+    )
 
     # Training parameters
     parser.add_argument("--lr", type=float, default=1e-4)

@@ -360,9 +360,11 @@ class ModifiedDBGFlowNet(PFBasedGFlowNet[Transitions]):
         else:
             # Evaluate the log PF of the actions sampled off policy.
             valid_log_pf_actions = pf_dist.log_prob(actions.tensor)
-        valid_log_pf_s_exit = pf_dist.log_prob(
-            torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
-        )
+        print(actions, flush=True)
+        # valid_log_pf_s_exit = pf_dist.log_prob(
+        #     torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
+        # )
+        valid_log_pf_s_exit = torch.zeros_like(valid_log_pf_actions)
 
         # The following two lines are slightly inefficient, given that most
         # next_states are also states, for which we already did a forward pass.
@@ -375,11 +377,12 @@ class ModifiedDBGFlowNet(PFBasedGFlowNet[Transitions]):
             with no_conditioning_exception_handler("pf", self.pf):
                 module_output = self.pf(valid_next_states)
 
-        valid_log_pf_s_prime_exit = self.pf.to_probability_distribution(
-            valid_next_states, module_output
-        ).log_prob(
-            torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
-        )
+        # valid_log_pf_s_prime_exit = self.pf.to_probability_distribution(
+        #     valid_next_states, module_output
+        # ).log_prob(
+        #     torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
+        # )
+        valid_log_pf_s_prime_exit = torch.zeros_like(valid_log_pf_actions)
 
         non_exit_actions = actions[~actions.is_exit]
 

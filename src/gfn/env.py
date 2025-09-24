@@ -288,7 +288,9 @@ class Env(ABC):
             A batch of next states.
         """
         assert states.batch_shape == actions.batch_shape
-        assert len(states.batch_shape) == 1, "Batch shape must be 1 for the step method."
+        assert (
+            len(states.batch_shape) == 1
+        ), "Batch shape must be 1 for the step method."
 
         valid_states_idx: torch.Tensor = ~states.is_sink_state
         assert valid_states_idx.shape == states.batch_shape
@@ -659,7 +661,9 @@ class DiscreteEnv(Env, ABC):
         self.update_masks(new_states)
         return new_states
 
-    def _backward_step(self, states: DiscreteStates, actions: Actions) -> DiscreteStates:
+    def _backward_step(
+        self, states: DiscreteStates, actions: Actions
+    ) -> DiscreteStates:
         """Wrapper for the user-defined `backward_step` function.
 
         This calls the `_backward_step` method of the parent class and updates masks.
