@@ -656,7 +656,7 @@ if __name__ == "__main__":
         default="gnn_v2",
         choices=["mlp", "gnn", "gnn_v2"],
     )
-    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--embedding_dim", type=int, default=128)
     parser.add_argument("--max_epsilon", type=float, default=1.0)
     parser.add_argument("--min_epsilon", type=float, default=0.1)
@@ -665,7 +665,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_buffer", dest="use_buffer", action="store_false")
     parser.add_argument("--buffer_capacity", type=int, default=100000)
     parser.add_argument("--prefill", type=int, default=100)
-    parser.add_argument("--sampling_batch_size", type=int, default=32)
+    parser.add_argument("--sampling_batch_size", type=int, default=128)
 
     # Loss
     parser.add_argument(
@@ -679,8 +679,8 @@ if __name__ == "__main__":
     # Training parameters
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--lr_Z", type=float, default=1e-1)
-    parser.add_argument("--n_iterations", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--n_iterations", type=int, default=100_000)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--n_steps_per_iteration", type=int, default=1)
 
     # Misc parameters
