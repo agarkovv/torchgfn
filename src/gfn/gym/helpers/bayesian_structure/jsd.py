@@ -128,7 +128,7 @@ def total_variation_distance(
     full_posterior_arr = np.array(full_posterior_list, dtype=np.float_)
     posterior_arr = np.array(posterior_list, dtype=np.float_)
 
-    return np.sum(np.abs(full_posterior_arr - posterior_arr)) / 2
+    return np.sum(np.abs(np.exp(full_posterior_arr) - np.exp(posterior_arr))) / 2
 
 
 def reward_correlation(
@@ -150,7 +150,7 @@ def reward_correlation(
     full_posterior_arr = np.array(full_posterior_list, dtype=np.float_)
     posterior_arr = np.array(posterior_list, dtype=np.float_)
 
-    return np.corrcoef(full_posterior_arr, posterior_arr)[0, 1]
+    return np.corrcoef(np.exp(full_posterior_arr), np.exp(posterior_arr))[0, 1]
 
 
 def get_full_posterior(
