@@ -52,6 +52,8 @@ from gfn.gym.helpers.bayesian_structure.jsd import (
     get_full_posterior,
     get_gfn_exact_posterior,
     jensen_shannon_divergence,
+    total_variation_distance,
+    reward_correlation,
     posterior_exact,
 )
 from gfn.utils.common import set_seed
@@ -587,6 +589,25 @@ def main(args: Namespace):
             "Loss": loss.item(),
             "log_r_mean": training_objects.log_rewards.mean().item(),
         }
+
+        if it % args.eval_every == 0:
+            ### Jensen-Shannon divergence, total variation distance, reward correlation
+            if env.n_nodes < 6:
+                full_posterior = get_full_posterior(
+                    scorer, data, env, gt_graph.node_names, verbose=False
+                )
+                exact_posterior = get_gfn_exact_posterior(
+                    posterior_exact(
+                        env, gflownet.pf, gt_graph.node_names, batch_size=args.batch_size
+                    )
+                )
+                jsd = jensen_shannon_divergence(full_posterior, exact_posterior)
+                tv = total_variation_distance(full_posterior, exact_posterior)
+                reward_corr = reward_correlation(full_posterior, exact_posterior)
+                postfix["Jensen-Shannon divergence"] = jsd
+                postfix["Total variation distance"] = tv
+                postfix["Reward correlation"] = reward_corr
+
         pbar.set_postfix(postfix)
 
     # Compute the metrics
@@ -604,7 +625,7 @@ def main(args: Namespace):
     for k, v in thres_metrics.items():
         print(f"{k}: {v}")
 
-    ### Jensen-Shannon divergence
+    ### Jensen-Shannon divergence, total variation distance, reward correlation
     if env.n_nodes < 6:
         full_posterior = get_full_posterior(
             scorer, data, env, gt_graph.node_names, verbose=False
@@ -615,7 +636,11 @@ def main(args: Namespace):
             )
         )
         jsd = jensen_shannon_divergence(full_posterior, exact_posterior)
+        tv = total_variation_distance(full_posterior, exact_posterior)
+        reward_corr = reward_correlation(full_posterior, exact_posterior)
         print(f"Jensen-Shannon divergence: {jsd}")
+        print(f"Total variation distance: {tv}")
+        print(f"Reward correlation: {reward_corr}")
 
 
 if __name__ == "__main__":
@@ -686,6 +711,7 @@ if __name__ == "__main__":
     # Misc parameters
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--use_cuda", action="store_true")
+    parser.add_argument("--eval_every", type=int, default=5_000)
     args = parser.parse_args()
 
     if not args.use_buffer:

@@ -109,6 +109,50 @@ def jensen_shannon_divergence(
     return 0.5 * np.sum(KL_full_posterior + KL_posterior)
 
 
+def total_variation_distance(
+    full_posterior: FullPosterior, posterior: FullPosterior
+) -> float:
+    # Convert to dictionaries to align distributions
+    full_posterior_dict = full_posterior.to_dict()
+    posterior_dict = posterior.to_dict()
+
+    # Get an (arbitrary ordering of the graphs)
+    graphs = list(full_posterior_dict.keys())
+    graphs = sorted(graphs, key=len)
+
+    # Get the two distributions aligned
+    full_posterior_list, posterior_list = [], []
+    for graph in graphs:
+        full_posterior_list.append(full_posterior_dict[graph])
+        posterior_list.append(posterior_dict[graph])
+    full_posterior_arr = np.array(full_posterior_list, dtype=np.float_)
+    posterior_arr = np.array(posterior_list, dtype=np.float_)
+
+    return np.sum(np.abs(full_posterior_arr - posterior_arr)) / 2
+
+
+def reward_correlation(
+    full_posterior: FullPosterior, posterior: FullPosterior
+) -> float:
+    # Convert to dictionaries to align distributions
+    full_posterior_dict = full_posterior.to_dict()
+    posterior_dict = posterior.to_dict()
+
+    # Get an (arbitrary ordering of the graphs)
+    graphs = list(full_posterior_dict.keys())
+    graphs = sorted(graphs, key=len)
+
+    # Get the two distributions aligned
+    full_posterior_list, posterior_list = [], []
+    for graph in graphs:
+        full_posterior_list.append(full_posterior_dict[graph])
+        posterior_list.append(posterior_dict[graph])
+    full_posterior_arr = np.array(full_posterior_list, dtype=np.float_)
+    posterior_arr = np.array(posterior_list, dtype=np.float_)
+
+    return np.corrcoef(full_posterior_arr, posterior_arr)[0, 1]
+
+
 def get_full_posterior(
     scorer: BaseScore,
     data: pd.DataFrame,
