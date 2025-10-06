@@ -5,6 +5,7 @@ import torch
 
 from gfn.actions import Actions
 from gfn.containers import Trajectories, Transitions
+from gfn.actions import GraphActions, GraphActionType
 from gfn.env import Env
 from gfn.estimators import ConditionalScalarEstimator, Estimator, ScalarEstimator
 from gfn.gflownet.base import PFBasedGFlowNet, loss_reduce
@@ -342,6 +343,8 @@ class ModifiedDBGFlowNet(PFBasedGFlowNet[Transitions]):
 
         check_compatibility(states, actions, transitions)
 
+        # Compute forward logits and masked log-probs explicitly to follow the
+        # semantics: P(add) = (1 - P(exit)) * P(edge_components | add).
         if transitions.conditioning is not None:
             with has_conditioning_exception_handler("pf", self.pf):
                 module_output = self.pf(states, transitions.conditioning[mask])
@@ -352,23 +355,36 @@ class ModifiedDBGFlowNet(PFBasedGFlowNet[Transitions]):
         if len(states) == 0:
             return torch.tensor(0.0, device=transitions.device)
 
-        pf_dist = self.pf.to_probability_distribution(states, module_output)
+        # Masks for valid actions/components
+        masks = states.forward_masks
 
-        if transitions.has_log_probs and not recalculate_all_logprobs:
-            valid_log_pf_actions = transitions[mask].log_probs
-            assert valid_log_pf_actions is not None
-        else:
-            # Evaluate the log PF of the actions sampled off policy.
-            valid_log_pf_actions = pf_dist.log_prob(actions.tensor)
-        # valid_log_pf_s_exit = pf_dist.log_prob(
-        #     torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
-        # )
-        # agarkovv FIXME:
-        valid_log_pf_s_exit = pf_dist.log_prob(
-            actions.__class__.make_exit_actions(
-                actions.batch_shape, device=actions.device
-            ).tensor
-        )
+        # Action type log-probs
+        at_logits = module_output[GraphActions.ACTION_TYPE_KEY].clone()
+        at_logits[~masks[GraphActions.ACTION_TYPE_KEY]] = -float("inf")
+        at_log_probs = torch.log_softmax(at_logits, dim=-1)
+        log_p_exit_s = at_log_probs[..., GraphActionType.EXIT]
+        log_p_add_s = at_log_probs[..., GraphActionType.ADD_EDGE]
+
+        # Edge class log-probs (present but often single class)
+        ec_logits = module_output[GraphActions.EDGE_CLASS_KEY].clone()
+        ec_logits[~masks[GraphActions.EDGE_CLASS_KEY]] = -float("inf")
+        ec_log_probs = torch.log_softmax(ec_logits, dim=-1)
+        log_p_edge_class = ec_log_probs.gather(
+            -1, actions.edge_class.view(-1, 1)
+        ).squeeze(-1)
+
+        # Edge index log-probs
+        ei_logits = module_output[GraphActions.EDGE_INDEX_KEY].clone()
+        ei_logits[~masks[GraphActions.EDGE_INDEX_KEY]] = -float("inf")
+        ei_log_probs = torch.log_softmax(ei_logits, dim=-1)
+        log_p_edge_index = ei_log_probs.gather(
+            -1, actions.edge_index.view(-1, 1)
+        ).squeeze(-1)
+
+        # Log prob of the forward action under PF
+        valid_log_pf_actions = log_p_add_s + log_p_edge_class + log_p_edge_index
+        # Log prob of taking EXIT from s under PF
+        valid_log_pf_s_exit = log_p_exit_s
 
         # The following two lines are slightly inefficient, given that most
         # next_states are also states, for which we already did a forward pass.
@@ -381,19 +397,11 @@ class ModifiedDBGFlowNet(PFBasedGFlowNet[Transitions]):
             with no_conditioning_exception_handler("pf", self.pf):
                 module_output = self.pf(valid_next_states)
 
-        # valid_log_pf_s_prime_exit = self.pf.to_probability_distribution(
-        #     valid_next_states, module_output
-        # ).log_prob(
-        #     torch.full_like(actions.tensor, actions.__class__.exit_action[0].item())
-        # )
-        # agarkovv FIXME:
-        valid_log_pf_s_prime_exit = self.pf.to_probability_distribution(
-            valid_next_states, module_output
-        ).log_prob(
-            actions.__class__.make_exit_actions(
-                actions.batch_shape, device=actions.device
-            ).tensor
-        )
+        # For s', recompute logits and masked action-type log-probs, and extract EXIT.
+        at_logits_next = module_output[GraphActions.ACTION_TYPE_KEY].clone()
+        at_logits_next[~valid_next_states.forward_masks[GraphActions.ACTION_TYPE_KEY]] = -float("inf")
+        at_log_probs_next = torch.log_softmax(at_logits_next, dim=-1)
+        valid_log_pf_s_prime_exit = at_log_probs_next[..., GraphActionType.EXIT]
 
         non_exit_actions = actions[~actions.is_exit]
 
