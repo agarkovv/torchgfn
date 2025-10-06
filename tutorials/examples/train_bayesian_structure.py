@@ -62,6 +62,9 @@ from tensordict import TensorDict
 from torch_geometric.data import Batch as GeometricBatch
 from torch_geometric.nn import global_add_pool
 from tqdm import trange
+from time import perf_counter
+import os
+import json
 
 from gfn.gym.bayesian_structure import BayesianStructure
 
@@ -543,6 +546,11 @@ def main(args: Namespace):
     epsilon_dict = defaultdict(float)
     total_niter = args.n_iterations + (args.prefill if args.use_buffer else 0)
     pbar = trange(total_niter, dynamic_ncols=True)
+
+    log_dir = "logs/bayesian_structure"
+    log_file = os.path.join(log_dir, "metrics.jsonl")
+    os.makedirs(log_dir, exist_ok=True)
+    start_time = perf_counter()
     for it in pbar:
         # Schedule epsilon throughout training
         eps = args.min_epsilon + (
@@ -585,9 +593,10 @@ def main(args: Namespace):
                 optimizer_logZ.step()
 
         assert training_objects.log_rewards is not None
+        log_rewards = training_objects.all_log_rewards if args.loss == "ModifiedDB" else training_objects.log_rewards
         postfix = {
             "Loss": loss.item(),
-            "log_r_mean": training_objects.log_rewards.mean().item(),
+            "log_r_mean": log_rewards.mean().item(),
         }
 
         if it % args.eval_every == 0:
@@ -608,7 +617,17 @@ def main(args: Namespace):
                 postfix["Total variation distance"] = tv
                 postfix["Reward correlation"] = reward_corr
 
+                with open(log_file, "a") as f:
+                    json.dump({"step": it, "time": perf_counter() - start_time, "jsd": jsd, "tv": tv, "reward_corr": reward_corr}, f)
+                    f.write("\n")
+
         pbar.set_postfix(postfix)
+
+    end_time = perf_counter()
+    print(f"Time taken: {end_time - start_time} seconds")
+    with open(os.path.join(log_dir, "train_time.jsonl"), "a") as f:
+        json.dump({"total_time": end_time - start_time, "total_iterations": total_niter, "steps_per_second": total_niter / (end_time - start_time)}, f)
+        f.write("\n")
 
     # Compute the metrics
     with torch.no_grad():
@@ -681,7 +700,7 @@ if __name__ == "__main__":
         default="gnn_v2",
         choices=["mlp", "gnn", "gnn_v2"],
     )
-    parser.add_argument("--num_layers", type=int, default=1)
+    parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--embedding_dim", type=int, default=128)
     parser.add_argument("--max_epsilon", type=float, default=1.0)
     parser.add_argument("--min_epsilon", type=float, default=0.1)
@@ -690,7 +709,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_buffer", dest="use_buffer", action="store_false")
     parser.add_argument("--buffer_capacity", type=int, default=100000)
     parser.add_argument("--prefill", type=int, default=100)
-    parser.add_argument("--sampling_batch_size", type=int, default=128)
+    parser.add_argument("--sampling_batch_size", type=int, default=32)
 
     # Loss
     parser.add_argument(
@@ -704,8 +723,8 @@ if __name__ == "__main__":
     # Training parameters
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--lr_Z", type=float, default=1e-1)
-    parser.add_argument("--n_iterations", type=int, default=100_000)
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--n_iterations", type=int, default=10_000)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--n_steps_per_iteration", type=int, default=1)
 
     # Misc parameters
